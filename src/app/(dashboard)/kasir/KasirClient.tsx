@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useState, useTransition, useEffect } from 'react'
 import { checkout } from '@/actions/transaction'
 import {
   Plus,
@@ -14,7 +14,9 @@ import {
   X,
   Check,
   Loader2,
-  Image as ImageIcon
+  Image as ImageIcon,
+  RefreshCw,
+  Calculator
 } from 'lucide-react'
 
 interface Category {
@@ -54,9 +56,24 @@ interface KasirClientProps {
 }
 
 export default function KasirClient({ initialProducts, categories, store }: KasirClientProps) {
-  const [products] = useState<Product[]>(initialProducts)
+  const [products, setProducts] = useState<Product[]>(initialProducts)
+  const [categoriesList, setCategoriesList] = useState<Category[]>(categories)
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedCategory, setSelectedCategory] = useState('ALL')
+
+  // PWA Offline states
+  const [isOnline, setIsOnline] = useState(true)
+  const [isSyncing, setIsSyncing] = useState(false)
+  const [syncMessage, setSyncMessage] = useState<string | null>(null)
+
+  // Bluetooth Printer states
+  const [isPrintingBluetooth, setIsPrintingBluetooth] = useState(false)
+  const [bluetoothPrintMsg, setBluetoothPrintMsg] = useState<{ type: 'error' | 'success', text: string } | null>(null)
+
+  // Calculator states
+  const [isCalcOpen, setIsCalcOpen] = useState(false)
+  const [calcInput, setCalcInput] = useState('')
+  const [calcResult, setCalcResult] = useState('')
 
   // Cart State
   const [cart, setCart] = useState<CartItem[]>([])
@@ -72,6 +89,154 @@ export default function KasirClient({ initialProducts, categories, store }: Kasi
   const [receipt, setReceipt] = useState<any>(null)
 
   const [isPending, startTransition] = useTransition()
+
+  // PWA offline event listener & initial caching
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setIsOnline(navigator.onLine)
+
+      const handleOnline = () => {
+        setIsOnline(true)
+        triggerSync()
+      }
+      const handleOffline = () => {
+        setIsOnline(false)
+      }
+
+      window.addEventListener('online', handleOnline)
+      window.addEventListener('offline', handleOffline)
+
+      // Caching data locally
+      import('@/lib/offlineDb').then((db) => {
+        db.cacheProducts(initialProducts).catch(console.error)
+        db.cacheCategories(categories).catch(console.error)
+      })
+
+      // Cek apakah ada transaksi tertunda saat load pertama
+      if (navigator.onLine) {
+        triggerSync()
+      }
+
+      return () => {
+        window.removeEventListener('online', handleOnline)
+        window.removeEventListener('offline', handleOffline)
+      }
+    }
+  }, [])
+
+  // Jika offline atau data server kosong, muat dari cache IndexedDB
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      if (!navigator.onLine || products.length === 0) {
+        import('@/lib/offlineDb').then(async (db) => {
+          const cachedProds = await db.getCachedProducts()
+          const cachedCats = await db.getCachedCategories()
+          if (cachedProds.length > 0) setProducts(cachedProds)
+          if (cachedCats.length > 0) setCategoriesList(cachedCats)
+        })
+      }
+    }
+  }, [products.length, categories.length])
+
+  // Sinkronisasi transaksi antrean offline ke Supabase
+  const triggerSync = async () => {
+    if (isSyncing) return
+    setIsSyncing(true)
+    try {
+      const db = await import('@/lib/offlineDb')
+      const queue = await db.getOfflineTransactions()
+      
+      if (queue.length > 0) {
+        setSyncMessage(`Menyinkronkan ${queue.length} transaksi offline ke server...`)
+        
+        for (const trx of queue) {
+          const res = await checkout(trx.payment_method, trx.paid_amount, trx.items)
+          if (!res.error) {
+            await db.removeOfflineTransaction(trx.id)
+          } else {
+            console.error('Gagal menyinkronkan transaksi:', res.error)
+          }
+        }
+        
+        setSyncMessage('Sinkronisasi data offline selesai!')
+        setTimeout(() => setSyncMessage(null), 3000)
+      }
+    } catch (err) {
+      console.error('Gagal sync:', err)
+    } finally {
+      setIsSyncing(false)
+    }
+  }
+
+  // Handle direct Bluetooth printing
+  const handleBluetoothPrint = async () => {
+    setIsPrintingBluetooth(true)
+    setBluetoothPrintMsg(null)
+    try {
+      const printer = await import('@/lib/bluetoothPrinter')
+      const res = await printer.connectAndPrintReceipt(receipt, store.name, store.description)
+      if (res.error) {
+        setBluetoothPrintMsg({ type: 'error', text: res.error })
+      } else {
+        setBluetoothPrintMsg({ type: 'success', text: 'Struk berhasil dicetak ke printer Bluetooth!' })
+        setTimeout(() => setBluetoothPrintMsg(null), 3000)
+      }
+    } catch (err: any) {
+      setBluetoothPrintMsg({ type: 'error', text: err.message || 'Gagal cetak printer.' })
+    } finally {
+      setIsPrintingBluetooth(false)
+    }
+  }
+
+  // Calculator click logic
+  const handleCalcClick = (val: string) => {
+    if (val === 'C') {
+      setCalcInput('')
+      setCalcResult('')
+    } else if (val === 'DEL') {
+      setCalcInput(prev => prev.slice(0, -1))
+    } else if (val === '=') {
+      try {
+        const sanitized = calcInput.replace(/[^0-9\+\-\*\/\.\(\)]/g, '')
+        if (!sanitized) return
+        const res = new Function(`return ${sanitized}`)()
+        if (res === Infinity || isNaN(res)) {
+          setCalcResult('Error')
+        } else {
+          setCalcResult(String(Number(res.toFixed(8))))
+        }
+      } catch (err) {
+        setCalcResult('Error')
+      }
+    } else {
+      setCalcInput(prev => prev + val)
+    }
+  }
+
+  // Keyboard listener for calculator when open
+  useEffect(() => {
+    if (!isCalcOpen) return
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const key = e.key
+      if (/[0-9\+\-\*\/\.\(\)]/.test(key)) {
+        e.preventDefault()
+        setCalcInput(prev => prev + key)
+      } else if (key === 'Enter') {
+        e.preventDefault()
+        handleCalcClick('=')
+      } else if (key === 'Backspace') {
+        e.preventDefault()
+        handleCalcClick('DEL')
+      } else if (key === 'Escape') {
+        e.preventDefault()
+        handleCalcClick('C')
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isCalcOpen, calcInput])
 
   // Filter Products
   const filteredProducts = products.filter((p) => {
@@ -157,6 +322,43 @@ export default function KasirClient({ initialProducts, categories, store }: Kasi
     100000
   ].filter((val, index, self) => val >= cartTotal && self.indexOf(val) === index)
 
+  const handleOfflineFallback = (finalPaidAmount: number, itemsForCheckout: any[]) => {
+    const uuid = () => (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : Math.random().toString(36).substring(2, 15)
+    const localTrxId = uuid()
+    const localTrxNum = `TRX-LOCAL-${Date.now()}`
+    
+    const localReceipt = {
+      id: localTrxId,
+      transaction_number: localTrxNum,
+      total_amount: cartTotal,
+      payment_method: paymentMethod,
+      paid_amount: finalPaidAmount,
+      change_amount: paymentMethod === 'CASH' ? finalPaidAmount - cartTotal : 0,
+      status: 'PENDING_SYNC',
+      created_at: new Date().toISOString(),
+      items: itemsForCheckout,
+      transaction_items: cart.map(item => ({
+        id: uuid(),
+        product_name_snapshot: item.name,
+        price_snapshot: item.price,
+        quantity: item.quantity,
+        subtotal: item.price * item.quantity
+      }))
+    }
+
+    import('@/lib/offlineDb').then(async (db) => {
+      try {
+        await db.queueOfflineTransaction(localReceipt)
+        setReceipt(localReceipt)
+        setIsCheckoutOpen(false)
+        clearCart()
+        setIsCartOpenMobile(false)
+      } catch (err: any) {
+        setCheckoutError(err.message || 'Gagal menyimpan transaksi offline.')
+      }
+    })
+  }
+
   // Handle Checkout Submit
   const handleCheckoutSubmit = () => {
     setCheckoutError(null)
@@ -170,16 +372,35 @@ export default function KasirClient({ initialProducts, categories, store }: Kasi
 
     const finalPaidAmount = paymentMethod === 'CASH' ? cashAmount : cartTotal
 
-    startTransition(async () => {
-      const res = await checkout(paymentMethod, finalPaidAmount, itemsForCheckout)
+    if (!isOnline) {
+      handleOfflineFallback(finalPaidAmount, itemsForCheckout)
+      return
+    }
 
-      if (res.error) {
-        setCheckoutError(res.error)
-      } else {
-        setReceipt(res.transaction)
-        setIsCheckoutOpen(false)
-        clearCart()
-        setIsCartOpenMobile(false)
+    startTransition(async () => {
+      try {
+        const res = await checkout(paymentMethod, finalPaidAmount, itemsForCheckout)
+
+        if (res.error) {
+          const isNetworkError = res.error.toLowerCase().includes('fetch') || 
+                               res.error.toLowerCase().includes('network') || 
+                               res.error.toLowerCase().includes('connection') ||
+                               res.error.toLowerCase().includes('failed to fetch')
+          if (isNetworkError) {
+            setIsOnline(false)
+            handleOfflineFallback(finalPaidAmount, itemsForCheckout)
+          } else {
+            setCheckoutError(res.error)
+          }
+        } else {
+          setReceipt(res.transaction)
+          setIsCheckoutOpen(false)
+          clearCart()
+          setIsCartOpenMobile(false)
+        }
+      } catch (err) {
+        setIsOnline(false)
+        handleOfflineFallback(finalPaidAmount, itemsForCheckout)
       }
     })
   }
@@ -200,6 +421,32 @@ export default function KasirClient({ initialProducts, categories, store }: Kasi
     <div className="flex flex-col lg:flex-row gap-8 relative h-full">
       {/* 1. KIRI: DAFTAR PRODUK (KASIR GRID) */}
       <div className="flex-1 flex flex-col space-y-6">
+        {/* PWA Offline & Sync Status Banner */}
+        <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5 rounded-3xl bg-white border border-surface-dim shadow-sm shadow-slate-100/50 no-print">
+          <div className="flex items-center space-x-2.5">
+            <div className={`w-2.5 h-2.5 rounded-full ${isOnline ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`} />
+            <span className="text-xs font-bold text-slate-700">
+              {isOnline ? 'Kasir Terhubung (Online)' : 'Mode Offline Aktif (Transaksi Disimpan Lokal)'}
+            </span>
+          </div>
+          {syncMessage ? (
+            <div className="flex items-center space-x-1.5 text-xs text-primary font-bold animate-pulse">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              <span>{syncMessage}</span>
+            </div>
+          ) : (
+            isOnline && (
+              <button
+                onClick={triggerSync}
+                disabled={isSyncing}
+                className="text-[10px] bg-slate-50 hover:bg-slate-100 border border-surface-dim text-slate-700 font-extrabold px-3 py-1.5 rounded-xl transition cursor-pointer flex items-center space-x-1"
+              >
+                <RefreshCw className={`w-3 h-3 ${isSyncing ? 'animate-spin' : ''}`} />
+                <span>Cek Sinkronisasi</span>
+              </button>
+            )
+          )}
+        </div>
         {/* Search & Category Filter */}
         <div className="flex flex-col sm:flex-row gap-4 bg-surface border border-surface-dim p-4 rounded-3xl z-10 shadow-sm shadow-slate-100">
           <div className="flex-1 relative">
@@ -223,7 +470,7 @@ export default function KasirClient({ initialProducts, categories, store }: Kasi
             >
               Semua
             </button>
-            {categories.map((cat) => (
+            {categoriesList.map((cat) => (
               <button
                 key={cat.id}
                 onClick={() => setSelectedCategory(cat.id)}
@@ -731,6 +978,11 @@ export default function KasirClient({ initialProducts, categories, store }: Kasi
                   <Check className="w-6 h-6 animate-pulse" />
                 </div>
                 <h4 className="font-extrabold text-primary text-base">Pembayaran Berhasil</h4>
+                {receipt.status === 'PENDING_SYNC' && (
+                  <span className="inline-block text-[10px] font-bold px-3 py-1 bg-amber-500/10 border border-amber-500/20 text-amber-600 rounded-full animate-pulse">
+                    Tersimpan Lokal (Menunggu Sinyal)
+                  </span>
+                )}
               </div>
 
               <div className="space-y-4 text-left border-y border-dashed border-slate-200 print-border-dashed py-4">
@@ -803,24 +1055,126 @@ export default function KasirClient({ initialProducts, categories, store }: Kasi
               </div>
             </div>
 
-            {/* Actions */}
-            <div className="flex gap-3 no-print">
-              <button
-                type="button"
-                onClick={handlePrint}
-                className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3.5 rounded-2xl flex items-center justify-center space-x-2 text-sm transition cursor-pointer"
-              >
-                <Printer className="w-4 h-4" />
-                <span>Cetak Struk</span>
-              </button>
+            {/* Bottom Actions */}
+            <div className="flex flex-col gap-2.5 no-print">
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={handlePrint}
+                  className="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3.5 rounded-2xl flex items-center justify-center space-x-2 text-xs transition cursor-pointer"
+                >
+                  <Printer className="w-4 h-4" />
+                  <span>Cetak (Kertas)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleBluetoothPrint}
+                  disabled={isPrintingBluetooth}
+                  className="flex-1 bg-blue-50 hover:bg-blue-100 text-blue-650 border border-blue-200 font-bold py-3.5 rounded-2xl flex items-center justify-center space-x-2 text-xs transition cursor-pointer disabled:opacity-50"
+                >
+                  {isPrintingBluetooth ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                      <span>Menghubungkan...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Printer className="w-4 h-4 text-blue-600" />
+                      <span>Cetak (Bluetooth)</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {bluetoothPrintMsg && (
+                <div className={`text-[10px] font-semibold text-center p-1.5 rounded-xl border ${
+                  bluetoothPrintMsg.type === 'error' 
+                    ? 'bg-rose-50 border-rose-100 text-rose-600' 
+                    : 'bg-emerald-50 border-emerald-100 text-emerald-600'
+                }`}>
+                  {bluetoothPrintMsg.text}
+                </div>
+              )}
+
               <button
                 type="button"
                 onClick={() => setReceipt(null)}
-                className="flex-1 bg-primary hover:bg-primary-container text-white font-black py-3.5 rounded-2xl text-sm transition active:scale-95 cursor-pointer shadow-md shadow-primary/10"
+                className="w-full bg-primary hover:bg-primary-container text-white font-black py-3.5 rounded-2xl text-sm transition active:scale-[0.98] cursor-pointer shadow-md shadow-primary/10 mt-1"
               >
                 Transaksi Baru
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Calculator Toggle Button */}
+      <button
+        onClick={() => setIsCalcOpen(!isCalcOpen)}
+        className="fixed bottom-6 right-6 md:bottom-8 md:right-8 w-14 h-14 bg-primary hover:bg-primary-container text-white rounded-full flex items-center justify-center shadow-lg active:scale-95 transition z-40 cursor-pointer no-print border border-emerald-55"
+        title="Kalkulator Cepat"
+      >
+        {isCalcOpen ? <X className="w-6 h-6" /> : <Calculator className="w-6 h-6" />}
+      </button>
+
+      {/* Floating Calculator Card */}
+      {isCalcOpen && (
+        <div className="fixed bottom-24 right-6 md:bottom-28 md:right-8 w-80 bg-white border border-[#cbdbf5] rounded-3xl shadow-2xl p-5 z-45 no-print animate-fade-in space-y-4">
+          {/* Header */}
+          <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+            <div className="flex items-center space-x-2 text-primary font-bold text-sm">
+              <Calculator className="w-4 h-4" />
+              <span>Kalkulator Kasir</span>
+            </div>
+            <button
+              onClick={() => setIsCalcOpen(false)}
+              className="text-slate-400 hover:text-slate-600 cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* Display */}
+          <div className="bg-slate-50 border border-surface-dim rounded-2xl p-4 text-right space-y-1 min-h-[72px] flex flex-col justify-center">
+            <div className="text-xs text-slate-400 font-mono truncate tracking-wider">
+              {calcInput || '0'}
+            </div>
+            <div className="text-xl font-extrabold text-primary font-mono truncate">
+              {calcResult || '0'}
+            </div>
+          </div>
+
+          {/* Keyboard Grid */}
+          <div className="grid grid-cols-4 gap-2">
+            {/* Row 1 */}
+            <button onClick={() => handleCalcClick('C')} className="bg-rose-50 hover:bg-rose-100 text-rose-600 font-bold py-3 rounded-xl text-sm transition active:scale-95 cursor-pointer">C</button>
+            <button onClick={() => handleCalcClick('DEL')} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3 rounded-xl text-sm transition active:scale-95 cursor-pointer">DEL</button>
+            <button onClick={() => handleCalcClick('(')} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3 rounded-xl text-sm transition active:scale-95 cursor-pointer">(</button>
+            <button onClick={() => handleCalcClick(')')} className="bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold py-3 rounded-xl text-sm transition active:scale-95 cursor-pointer">)</button>
+
+            {/* Row 2 */}
+            <button onClick={() => handleCalcClick('7')} className="bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-sm transition active:scale-95 cursor-pointer">7</button>
+            <button onClick={() => handleCalcClick('8')} className="bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-sm transition active:scale-95 cursor-pointer">8</button>
+            <button onClick={() => handleCalcClick('9')} className="bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-sm transition active:scale-95 cursor-pointer">9</button>
+            <button onClick={() => handleCalcClick('/')} className="bg-emerald-50 hover:bg-emerald-100 text-primary font-bold py-3 rounded-xl text-sm transition active:scale-95 cursor-pointer">/</button>
+
+            {/* Row 3 */}
+            <button onClick={() => handleCalcClick('4')} className="bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-sm transition active:scale-95 cursor-pointer">4</button>
+            <button onClick={() => handleCalcClick('5')} className="bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-sm transition active:scale-95 cursor-pointer">5</button>
+            <button onClick={() => handleCalcClick('6')} className="bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-sm transition active:scale-95 cursor-pointer">6</button>
+            <button onClick={() => handleCalcClick('*')} className="bg-emerald-50 hover:bg-emerald-100 text-primary font-bold py-3 rounded-xl text-sm transition active:scale-95 cursor-pointer">*</button>
+
+            {/* Row 4 */}
+            <button onClick={() => handleCalcClick('1')} className="bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-sm transition active:scale-95 cursor-pointer">1</button>
+            <button onClick={() => handleCalcClick('2')} className="bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-sm transition active:scale-95 cursor-pointer">2</button>
+            <button onClick={() => handleCalcClick('3')} className="bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-sm transition active:scale-95 cursor-pointer">3</button>
+            <button onClick={() => handleCalcClick('-')} className="bg-emerald-50 hover:bg-emerald-100 text-primary font-bold py-3 rounded-xl text-sm transition active:scale-95 cursor-pointer">-</button>
+
+            {/* Row 5 */}
+            <button onClick={() => handleCalcClick('0')} className="bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-sm transition active:scale-95 cursor-pointer">0</button>
+            <button onClick={() => handleCalcClick('.')} className="bg-slate-50 hover:bg-slate-100 text-slate-700 font-bold py-3 rounded-xl text-sm transition active:scale-95 cursor-pointer">.</button>
+            <button onClick={() => handleCalcClick('=')} className="bg-primary hover:bg-primary-container text-white font-extrabold py-3 rounded-xl text-sm transition active:scale-95 cursor-pointer">=</button>
+            <button onClick={() => handleCalcClick('+')} className="bg-emerald-50 hover:bg-emerald-100 text-primary font-bold py-3 rounded-xl text-sm transition active:scale-95 cursor-pointer">+</button>
           </div>
         </div>
       )}
