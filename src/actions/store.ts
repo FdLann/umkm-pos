@@ -1,26 +1,12 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
+import { getCurrentUser, getCurrentStore } from '@/lib/supabase/authStore'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 
 export async function getStore() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return null
-
-  const { data: store, error } = await supabase
-    .from('stores')
-    .select('*')
-    .eq('owner_id', user.id)
-    .maybeSingle()
-
-  if (error) {
-    console.error('Error fetching store:', error)
-    return null
-  }
-
-  return store
+  return await getCurrentStore()
 }
 
 export async function createStore(prevState: any, formData: FormData) {
@@ -32,7 +18,7 @@ export async function createStore(prevState: any, formData: FormData) {
   }
 
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const user = await getCurrentUser()
 
   if (!user) {
     return { error: 'Sesi kedaluwarsa. Silakan masuk kembali.' }

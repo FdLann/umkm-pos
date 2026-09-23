@@ -1,27 +1,13 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
+import { getActiveStoreId } from '@/lib/supabase/authStore'
 import { revalidatePath } from 'next/cache'
-
-async function getStoreId() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) throw new Error('Tidak terautentikasi')
-
-  const { data: store, error } = await supabase
-    .from('stores')
-    .select('id')
-    .eq('owner_id', user.id)
-    .single()
-
-  if (error || !store) throw new Error('Toko tidak ditemukan')
-  return store.id
-}
 
 export async function getCategories() {
   try {
     const supabase = await createClient()
-    const storeId = await getStoreId()
+    const storeId = await getActiveStoreId()
 
     const { data: categories, error } = await supabase
       .from('categories')
@@ -44,7 +30,7 @@ export async function createCategory(name: string) {
 
   try {
     const supabase = await createClient()
-    const storeId = await getStoreId()
+    const storeId = await getActiveStoreId()
 
     const { error } = await supabase
       .from('categories')
@@ -75,7 +61,7 @@ export async function updateCategory(id: string, name: string) {
 
   try {
     const supabase = await createClient()
-    const storeId = await getStoreId()
+    const storeId = await getActiveStoreId()
 
     const { error } = await supabase
       .from('categories')
@@ -107,7 +93,7 @@ export async function deleteCategory(id: string) {
 
   try {
     const supabase = await createClient()
-    const storeId = await getStoreId()
+    const storeId = await getActiveStoreId()
 
     const { error } = await supabase
       .from('categories')

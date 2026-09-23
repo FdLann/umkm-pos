@@ -1,5 +1,4 @@
-import React from 'react'
-import { createClient } from '@/lib/supabase/server'
+import { getCurrentUser, getCurrentStore } from '@/lib/supabase/authStore'
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { logout } from '@/actions/auth'
@@ -11,7 +10,9 @@ import {
   History,
   Settings,
   LogOut,
-  Store as StoreIcon
+  Store as StoreIcon,
+  Wheat,
+  Coins
 } from 'lucide-react'
 
 // Sidebar Link Component
@@ -25,7 +26,7 @@ function SidebarLink({ href, icon, label }: SidebarLinkProps) {
   return (
     <Link
       href={href}
-      className="flex items-center space-x-3 px-4 py-3.5 rounded-2xl text-slate-700 hover:text-primary hover:bg-surface-container-high transition duration-200 text-sm font-bold group"
+      className="flex items-center space-x-3 px-4 py-3 rounded-2xl text-slate-700 hover:text-primary hover:bg-surface-container-high transition duration-200 text-sm font-bold group"
     >
       <span className="text-slate-500 group-hover:text-primary transition">{icon}</span>
       <span>{label}</span>
@@ -38,21 +39,13 @@ export default async function DashboardLayout({
 }: {
   children: React.ReactNode
 }) {
-  const supabase = await createClient()
-
-  // 1. Get authenticated user
-  const { data: { user } } = await supabase.auth.getUser()
+  // 1. Get authenticated user & store with request-level caching
+  const user = await getCurrentUser()
   if (!user) {
     redirect('/login')
   }
 
-  // 2. Get store info
-  const { data: store } = await supabase
-    .from('stores')
-    .select('*')
-    .eq('owner_id', user.id)
-    .maybeSingle()
-
+  const store = await getCurrentStore()
   if (!store) {
     redirect('/store/create')
   }
@@ -61,7 +54,7 @@ export default async function DashboardLayout({
     <div className="min-h-screen bg-background text-foreground flex flex-col md:flex-row font-sans">
       {/* 1. DESKTOP SIDEBAR */}
       <aside className="hidden md:flex md:w-64 bg-surface-container border-r border-surface-dim flex-col justify-between shrink-0 p-5">
-        <div className="space-y-8">
+        <div className="space-y-6">
           {/* Store Brand */}
           <div className="flex items-center space-x-3 px-2">
             <div className="p-2 bg-primary/10 border border-primary/20 rounded-xl text-primary">
@@ -69,7 +62,7 @@ export default async function DashboardLayout({
             </div>
             <div className="truncate">
               <h2 className="text-sm font-extrabold truncate text-foreground">{store.name}</h2>
-              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Kasir POS</p>
+              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Kasir POS & HPP</p>
             </div>
           </div>
 
@@ -78,6 +71,8 @@ export default async function DashboardLayout({
             <SidebarLink href="/" icon={<LayoutDashboard className="w-5 h-5" />} label="Dashboard" />
             <SidebarLink href="/kasir" icon={<ShoppingCart className="w-5 h-5" />} label="Kasir" />
             <SidebarLink href="/produk" icon={<Package className="w-5 h-5" />} label="Produk" />
+            <SidebarLink href="/bahan" icon={<Wheat className="w-5 h-5" />} label="Bahan Baku" />
+            <SidebarLink href="/biaya-operasional" icon={<Coins className="w-5 h-5" />} label="Biaya Tetap & HPP" />
             <SidebarLink href="/kategori" icon={<Layers className="w-5 h-5" />} label="Kategori" />
             <SidebarLink href="/transaksi" icon={<History className="w-5 h-5" />} label="Riwayat" />
             <SidebarLink href="/pengaturan" icon={<Settings className="w-5 h-5" />} label="Pengaturan" />
@@ -111,30 +106,30 @@ export default async function DashboardLayout({
       </header>
 
       {/* Mobile Bottom Navigation */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-surface-container/95 backdrop-blur-lg border-t border-surface-dim flex justify-around py-2.5 z-30 px-2 shadow-lg">
-        <Link href="/" className="flex flex-col items-center justify-center text-slate-500 hover:text-primary active:scale-95 transition text-[10px] font-semibold">
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-surface-container/95 backdrop-blur-lg border-t border-surface-dim flex justify-around py-2.5 z-30 px-1 shadow-lg overflow-x-auto">
+        <Link href="/" className="flex flex-col items-center justify-center text-slate-500 hover:text-primary active:scale-95 transition text-[10px] font-semibold px-1.5">
           <LayoutDashboard className="w-5 h-5 mb-0.5" />
           <span>Dashboard</span>
         </Link>
-        <Link href="/kasir" className="flex flex-col items-center justify-center text-slate-500 hover:text-primary active:scale-95 transition text-[10px] font-semibold">
+        <Link href="/kasir" className="flex flex-col items-center justify-center text-slate-500 hover:text-primary active:scale-95 transition text-[10px] font-semibold px-1.5">
           <ShoppingCart className="w-5 h-5 mb-0.5" />
           <span>Kasir</span>
         </Link>
-        <Link href="/produk" className="flex flex-col items-center justify-center text-slate-500 hover:text-primary active:scale-95 transition text-[10px] font-semibold">
+        <Link href="/produk" className="flex flex-col items-center justify-center text-slate-500 hover:text-primary active:scale-95 transition text-[10px] font-semibold px-1.5">
           <Package className="w-5 h-5 mb-0.5" />
           <span>Produk</span>
         </Link>
-        <Link href="/kategori" className="flex flex-col items-center justify-center text-slate-500 hover:text-primary active:scale-95 transition text-[10px] font-semibold">
-          <Layers className="w-5 h-5 mb-0.5" />
-          <span>Kategori</span>
+        <Link href="/bahan" className="flex flex-col items-center justify-center text-slate-500 hover:text-primary active:scale-95 transition text-[10px] font-semibold px-1.5">
+          <Wheat className="w-5 h-5 mb-0.5" />
+          <span>Bahan</span>
         </Link>
-        <Link href="/transaksi" className="flex flex-col items-center justify-center text-slate-500 hover:text-primary active:scale-95 transition text-[10px] font-semibold">
+        <Link href="/biaya-operasional" className="flex flex-col items-center justify-center text-slate-500 hover:text-primary active:scale-95 transition text-[10px] font-semibold px-1.5">
+          <Coins className="w-5 h-5 mb-0.5" />
+          <span>Biaya</span>
+        </Link>
+        <Link href="/transaksi" className="flex flex-col items-center justify-center text-slate-500 hover:text-primary active:scale-95 transition text-[10px] font-semibold px-1.5">
           <History className="w-5 h-5 mb-0.5" />
           <span>Riwayat</span>
-        </Link>
-        <Link href="/pengaturan" className="flex flex-col items-center justify-center text-slate-500 hover:text-primary active:scale-95 transition text-[10px] font-semibold">
-          <Settings className="w-5 h-5 mb-0.5" />
-          <span>Pengaturan</span>
         </Link>
       </nav>
 

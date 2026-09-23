@@ -1,5 +1,5 @@
 const DB_NAME = 'pos_umkm_offline_db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 export function initOfflineDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -34,6 +34,16 @@ export function initOfflineDb(): Promise<IDBDatabase> {
       // Store untuk cache kategori offline
       if (!db.objectStoreNames.contains('categories_cache')) {
         db.createObjectStore('categories_cache', { keyPath: 'id' });
+      }
+
+      // Store untuk cache bahan baku offline
+      if (!db.objectStoreNames.contains('ingredients_cache')) {
+        db.createObjectStore('ingredients_cache', { keyPath: 'id' });
+      }
+
+      // Store untuk cache biaya tetap offline
+      if (!db.objectStoreNames.contains('fixed_costs_cache')) {
+        db.createObjectStore('fixed_costs_cache', { keyPath: 'id' });
       }
     };
   });
@@ -137,6 +147,56 @@ export async function getCachedCategories(): Promise<any[]> {
     const store = tx.objectStore('categories_cache');
     const request = store.getAll();
 
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+// Simpan cache bahan baku
+export async function cacheIngredients(ingredients: any[]): Promise<void> {
+  const db = await initOfflineDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('ingredients_cache', 'readwrite');
+    const store = tx.objectStore('ingredients_cache');
+    store.clear();
+    ingredients.forEach((item) => store.put(item));
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+// Ambil cache bahan baku
+export async function getCachedIngredients(): Promise<any[]> {
+  const db = await initOfflineDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('ingredients_cache', 'readonly');
+    const store = tx.objectStore('ingredients_cache');
+    const request = store.getAll();
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+// Simpan cache biaya tetap
+export async function cacheFixedCosts(fixedCosts: any[]): Promise<void> {
+  const db = await initOfflineDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('fixed_costs_cache', 'readwrite');
+    const store = tx.objectStore('fixed_costs_cache');
+    store.clear();
+    fixedCosts.forEach((item) => store.put(item));
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+// Ambil cache biaya tetap
+export async function getCachedFixedCosts(): Promise<any[]> {
+  const db = await initOfflineDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('fixed_costs_cache', 'readonly');
+    const store = tx.objectStore('fixed_costs_cache');
+    const request = store.getAll();
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
